@@ -1,0 +1,181 @@
+* PANEL GARCH - Cermeño, Grier (2006)
+* TODO: testes de especificação
+
+all 648
+open data 123.xls
+data(format=xls,org=columns) / indprod_DEU	indprod_BRA	indprod_CAN	indprod_CHI	indprod_EST	indprod_USA	indprod_FRA	indprod_IND	indprod_ITA	indprod_JPN	indprod_MEX	indprod_GBR	indprod_RUS	indprod_TUR
+
+* a estimação fica complcada com + de 4 cross-sections...
+compute n=4
+
+* desenvolvidos
+set y1 = indprod_usa
+set y2 = indprod_jpn
+set y3 = indprod_deu
+set y4 = indprod_gbr
+compute gstart=13,gend=648
+
+* emergentes
+*set y1 = indprod_bra
+*set y2 = indprod_chi
+*set y3 = indprod_mex
+*set y4 = indprod_rus
+*compute gstart=400,gend=648
+
+*
+dec series[vect] yv
+dec frml[vect] residv
+dec vect[series] u(n)
+*
+* The paths of the covariance matrices and uu' are saved in the
+* SERIES[SYMM] named H and UU. UX and HX are used for the current values
+* of the residual vector and H matrices
+*
+declare series[symm] h uu
+*
+* ux is used when extracting a u vector
+*
+declare symm hx(n,n)
+declare vect ux(n)
+*
+* These will be the parameters for the mean equations. These are
+* adjusted to add variance or covariance terms as needed.
+*
+
+dec vect b(n)
+dec real ar1 ar2 ar3 ar4 ar5 ar6 ar7 ar8 ar9 ar10 ar11 ar12
+dec real archm
+nonlin(parmset=meanparms) b ar1 ar2 ar3 ar4 ar5 ar6 ar7 ar8 ar9 ar10 ar11 ar12
+*
+* Mean model = individual effects + AR(12) + sqrt(h) "M" term
+*
+frml residv = yv-b-ar1*%xdiag(yv{1})-ar2*%xdiag(yv{2})-ar3*%xdiag(yv{3})-ar4*%xdiag(yv{4})-ar5*%xdiag(yv{5}) $
+                  -ar6*%xdiag(yv{6})-ar7*%xdiag(yv{7})-ar8*%xdiag(yv{8})-ar9*%xdiag(yv{9})-ar10*%xdiag(yv{10}) $
+                  -ar11*%xdiag(yv{11})-ar12*%xdiag(yv{12})-archm*%sqrt(%xdiag(%xdiag(h)))
+*
+gset h  = %zeros(n,n)
+gset yv = ||y1,y2,y3,y4||
+*
+* Get guess values for the mean parameters ignoring the "M" term by
+* running an NLSYSTEM. (The system is actually linear, so this converges
+* right away).
+*
+compute archm=0
+nlsystem(parmset=meanparms,frml=residv) gstart gend
+compute rr=%sigma
+*
+* Reset the parameter set for the means to include archm
+*
+nonlin(parmset=meanparms) b ar1 ar2 ar3 ar4 ar5 ar6 ar7 ar8 ar9 ar10 ar11 ar12 archm
+
+
+*************************************************************************
+*
+* From this point, everything is the same as it would be for any GARCH
+* model done using MAXIMIZE.
+*
+* These are used to initialize pre-sample variances.
+*
+gset h  * gend = rr
+gset uu * gend = rr
+*
+declare frml[symm] hf
+*
+* Common formula for the log likelihood
+*
+frml logl = $
+    hx    = hf(t) , $
+    h(t)  = hx, $
+    ux    = residv , $
+    uu(t) = %outerxx(ux), $
+    %pt(u,t,ux),$
+    %logdensity(hx,ux)
+*************************************************************
+*
+* Panel GARCH - DVECH with restrictions
+* Diferentes especificações de var-cov. são determinadas aqui
+* Rodar apenas a respectiva porção de código!
+
+***** SPEC 1: VARIÂNCIAS CONDICIONAIS, COV ZERO ***************
+dec vect vcs(n)
+dec real delta gamma
+dec symm vbs(n,n) vas(n,n)
+*
+compute vcs=%xdiag(rr)*.1, delta=gamma=.8
+nonlin(parmset=garchparms) vcs delta gamma
+nonlin(parmset=constraint) delta>=0 gamma>=0 delta+gamma<=1
+frml hf = %diag(vcs)+vbs.*h{1}+vas.*uu{1}
+
+function PGARCHInit
+local integer i j
+ewise vbs(i,j)=%if(i==j,delta,0)
+ewise vas(i,j)=%if(i==j,gamma,0)
+end
+*
+maximize(start=PGARCHInit(),parmset=meanparms+garchparms,pmethod=simplex,piters=50,method=bfgs,iters=500) logl gstart gend
+@regcrits
+
+* Teste Q multivariado
+@mvqstat(lags=12,dfc=12)
+# u(1) u(2) u(3) u(4)
+
+* Teste de significância dos efeitos individuais na média
+TEST(ZEROS)
+# 1 2 3 4
+
+***** SPEC 2: VAR E COV CONDICIONAIS, VAR. E COV. INCONDICIONAL COMUM ***************
+* Este modelo está com problemas, os coefs. estimados pras vars-covs são instáveis e não se aproximam das SPECS 1 e 3
+
+dec symm vcs(n,n)
+dec real alpha delta lambda eta gamma rho
+dec symm vbs(n,n) vas(n,n)
+*
+compute vcs=rr*.1, delta=lambda=.8, gamma=rho=.1
+nonlin(parmset=garchparms) alpha delta lambda eta gamma rho
+nonlin(parmset=constraint) delta>=0 lambda>=0 gamma>=0 rho>=0 delta+gamma<=1 lambda+rho<=1
+frml hf = vcs+vbs.*h{1}+vas.*uu{1}
+
+function PGARCHInit
+local integer i j
+ewise vcs(i,j)=%if(i==j,alpha,eta)
+ewise vbs(i,j)=%if(i==j,delta,lambda)
+ewise vas(i,j)=%if(i==j,gamma,rho)
+end
+*
+maximize(start=PGARCHInit(),parmset=meanparms+garchparms,pmethod=simplex,piters=50,method=bfgs,iters=500) logl gstart gend
+@regcrits
+
+* Teste Q multivariado
+@mvqstat(lags=12,dfc=12)
+# u(1) u(2) u(3) u(4)
+
+* Teste de significância dos efeitos individuais na média
+TEST(ZEROS)
+# 1 2 3 4
+
+***** SPEC 3: VAR E COV CONDICIONAIS: MODELO COMPLETO *********
+dec symm vcs(n,n)
+dec real delta lambda gamma rho
+dec symm vbs(n,n) vas(n,n)
+*
+compute vcs=rr*.1, delta=lambda=.8, gamma=rho=.1
+nonlin(parmset=garchparms) vcs delta lambda gamma rho
+nonlin(parmset=constraint) delta>=0 lambda>=0 gamma>=0 rho>=0 delta+gamma<=1 lambda+rho<=1
+frml hf = vcs+vbs.*h{1}+vas.*uu{1}
+
+function PGARCHInit
+local integer i j
+ewise vbs(i,j)=%if(i==j,delta,lambda)
+ewise vas(i,j)=%if(i==j,gamma,rho)
+end
+*
+maximize(start=PGARCHInit(),parmset=meanparms+garchparms+constraint,pmethod=simplex,piters=50,method=bfgs,iters=500) logl gstart gend
+@regcrits
+
+* Teste Q multivariado
+@mvqstat(lags=12,dfc=12)
+# u(1) u(2) u(3) u(4)
+
+* Teste de significância dos efeitos individuais na média
+TEST(ZEROS)
+# 1 2 3 4

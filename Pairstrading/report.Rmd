@@ -1,0 +1,125 @@
+---
+title: "Pairs trading e cointegração: um modelo de correção de erros com _thresholds_"
+author: "Angelo"
+date: "14 de setembro de 2016"
+output: 
+  pdf_document: 
+    keep_tex: yes
+---
+
+## Dados
+
+Preparando os dados...
+
+```{r, echo=FALSE}
+library(urca)
+library(tsDyn)
+library(tseries)
+library(zoo)
+library(egcm)
+library(quantmod)
+
+# base ---------------------------
+load("bovespa.RData") # as séries de preços
+p <- read.zoo(base); rm(base) 
+p <- p[which(index(p)>"2005-01-01")] # obs. desde 2005
+n = nrow(p)
+
+# descartando ativos com pouca movimentação/liquidez (+ de 10% do período NA's)
+missing <- colSums(is.na(p))
+missing <- missing/n
+
+missing <- missing[missing>=0.1]
+p <- p[,!(names(p) %in% names(missing))]
+rm(missing)
+
+p <- na.locf(p) # completando NA's no meio da base
+p <- p[complete.cases(p),] # tratando NA's iniciais
+
+# para comparação: retornos do IBOVESPA e do CDI
+load("ibovcdi.RData") # já está em log retornos
+ibovcdi <- ibovcdi[index(p)] # subsetting - mesma amostra das séries de preços
+
+# retornos contínuos
+colSums(diff(log(p)), na.rm = T)*100
+
+# tamanho das janelas de estimação e trading
+es <- 300
+tr <- 100
+```
+
+## Resultados
+
+A tarefa de encontrar os pares é um pouco demorada, assim resolvi separar a fase de seleção e as simulações de trades.
+
+# Portfolio com 5 pares
+
+Em primeiro lugar, a estratégia de pairs trading com o modelo de *mínimos quadrados* (o nosso _benchmark_).
+
+```{r}
+# estimações ----------------------------------
+source("tradefun.R")
+pairs1 <- pairs(p, portfolio = 5, estimation = es, trading = tr)
+```
+
+```{r, results=FALSE}
+test1 <- trading(p, pairs1, estimation = es, trading = tr, method = "tls")
+```
+
+```{r}
+test1$results
+```
+
+Agora, o modelo *threshold vector ECM*.
+
+```{r, results=FALSE}
+test2 <- trading(p, pairs1, estimation = es, trading = tr, method = "tvecm")
+```
+
+```{r}
+test2$results
+```
+
+
+Gerando o gráfico.
+
+```{r}
+plot(cbind(cumsum(ibovcdi), test1$returns, test2$returns), plot.type="single", ylab = "R_t", xlab = "Tempo", lty=c(3,3,1,1), lwd = c(2,2,2,2), col=c("red","black","blue","green"))
+legend('topleft', c("IBOV","CDI","Pairs trading LS", "Pairs trading TVECM"), cex = 0.7, lty=c(3,3,1,1), lwd=c(2,2,2,2), col=c("red","black","blue","green"), bty="n", y.intersp = 0.6)
+```
+
+# Portfolio com 10 pares
+
+A estratégia de pairs trading com o modelo de *mínimos quadrados*.
+
+```{r}
+# estimações ----------------------------------
+source("tradefun.R")
+pairs2 <- pairs(p, portfolio = 10, estimation = es, trading = tr)
+```
+
+```{r, results=FALSE}
+test3 <- trading(p, pairs2, estimation = es, trading = tr, method = "tls")
+```
+
+```{r}
+test3$results
+```
+
+O modelo _threshold vector ECM_.
+
+```{r, results=FALSE}
+test4 <- trading(p, pairs2, estimation = es, trading = tr, method = "tvecm")
+```
+
+```{r}
+test4$results
+```
+
+O gráfico:
+
+```{r}
+plot(cbind(cumsum(ibovcdi), test3$returns, test4$returns), plot.type="single", ylab = "R_t", xlab = "Tempo", lty=c(3,3,1,1), lwd = c(2,2,2,2), col=c("red","black","blue","green"))
+legend('topleft', c("IBOV","CDI","Pairs trading LS", "Pairs trading TVECM"), cex = 0.7, lty=c(3,3,1,1), lwd=c(2,2,2,2), col=c("red","black","blue","green"), bty="n", y.intersp = 0.6)
+```
+
